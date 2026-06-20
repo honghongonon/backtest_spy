@@ -1,8 +1,28 @@
+import json
+import os
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
 st.set_page_config(page_title="ETF 미래 자산 시뮬레이터", layout="wide")
+
+SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_portfolio.json")
+
+
+def load_saved_state() -> dict:
+    if os.path.exists(SAVE_FILE):
+        try:
+            with open(SAVE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def save_state(data: dict) -> None:
+    with open(SAVE_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 # 과거 평균치를 바탕으로 한 기본 가정값 (사용자가 직접 수정 가능)
 DEFAULT_ASSUMPTIONS = {
@@ -255,8 +275,11 @@ with tab3:
         "(예: 비트코인처럼 목록에 없는 종목도 이름과 예상 연평균 수익률/배당율을 직접 적으면 같이 계산됩니다. 배당이 없으면 0으로 두세요)."
     )
 
+    saved = load_saved_state()
+
     default_rows = pd.DataFrame(
-        {
+        saved.get("holdings")
+        or {
             "종목": list(DEFAULT_ASSUMPTIONS.keys()),
             "현재 보유금액(원)": [0, 0, 0],
             "연평균 가격상승률(%)": [d["price_growth"] for d in DEFAULT_ASSUMPTIONS.values()],
@@ -279,20 +302,42 @@ with tab3:
 
     c1, c2 = st.columns(2)
     with c1:
-        years3 = st.slider("투자 기간 (년)", 1, 40, 20, key="y3")
+        years3 = st.slider("투자 기간 (년)", 1, 40, saved.get("years3", 20), key="y3")
     with c2:
-        monthly3 = st.number_input("매월 추가 적립금 (원, 보유 비중대로 분배)", min_value=0, value=0, step=50_000, key="m3")
+        monthly3 = st.number_input(
+            "매월 추가 적립금 (원, 보유 비중대로 분배)",
+            min_value=0,
+            value=saved.get("monthly3", 0),
+            step=50_000,
+            key="m3",
+        )
 
-    pool_handling = st.radio("배당금 처리 방식", POOL_DIVIDEND_OPTIONS, horizontal=True, key="pool3")
+    pool_index = (
+        POOL_DIVIDEND_OPTIONS.index(saved["pool_handling"])
+        if saved.get("pool_handling") in POOL_DIVIDEND_OPTIONS
+        else 0
+    )
+    pool_handling = st.radio("배당금 처리 방식", POOL_DIVIDEND_OPTIONS, horizontal=True, index=pool_index, key="pool3")
 
     dest_name = None
     dest_total_growth = 0.0
     if pool_handling == POOL_DIVIDEND_OPTIONS[1]:
         dest_options = [n for n in holdings["종목"].dropna().tolist() if str(n).strip()]
         if dest_options:
-            dest_name = st.selectbox("배당을 몰아서 투자할 종목", dest_options, key="dest3")
+            dest_index = dest_options.index(saved["dest_name"]) if saved.get("dest_name") in dest_options else 0
+            dest_name = st.selectbox("배당을 몰아서 투자할 종목", dest_options, index=dest_index, key="dest3")
             dest_row = holdings[holdings["종목"] == dest_name].iloc[0]
             dest_total_growth = (dest_row["연평균 가격상승률(%)"] + dest_row["연 배당율(%)"]) / 100
+
+    save_state(
+        {
+            "holdings": holdings.to_dict("records"),
+            "years3": years3,
+            "monthly3": monthly3,
+            "pool_handling": pool_handling,
+            "dest_name": dest_name,
+        }
+    )
 
     valid = holdings[holdings["종목"].notna() & (holdings["종목"].astype(str).str.strip() != "")].copy()
     valid[["현재 보유금액(원)", "연평균 가격상승률(%)", "연 배당율(%)"]] = valid[
